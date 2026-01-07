@@ -11,20 +11,31 @@ const PORT = 3001;
 
 app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static('.'));
+// Serve static files from the build directory
+app.use(express.static(path.join(__dirname, 'dist')));
 
-const DB_FILE = path.join(__dirname, 'database.json');
+const DB_FILE = path.join(__dirname, 'database_new.json');
 
 const loadData = () => {
+    const seed = {
+        users: [...initialData.users],
+        transactions: { ...initialData.transactions }
+    };
+
     if (!fs.existsSync(DB_FILE)) {
-        const seed = {
-            users: [...initialData.users],
-            transactions: { ...initialData.transactions }
-        };
         fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
         return seed;
     }
-    return JSON.parse(fs.readFileSync(DB_FILE));
+
+    try {
+        const data = fs.readFileSync(DB_FILE, 'utf8');
+        if (!data.trim()) throw new Error("Empty file");
+        return JSON.parse(data);
+    } catch (err) {
+        console.log("Database corrupted or empty, resetting to initial state.");
+        fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
+        return seed;
+    }
 };
 
 const saveData = (data) => {
@@ -62,35 +73,58 @@ app.get('/api/transactions/:accountNumber', (req, res) => {
 });
 
 app.post('/api/transactions', (req, res) => {
-    const { accountNumber, description, amount, type } = req.body;
+    const { accountNumber, description, amount, type, recipientAccount } = req.body;
+    const val = parseFloat(amount);
 
-    if (!db.transactions[accountNumber]) {
-        db.transactions[accountNumber] = [];
+    if (!db.transactions[accountNumber]) db.transactions[accountNumber] = [];
+
+    // Validation
+    const senderTx = db.transactions[accountNumber];
+    const senderBal = senderTx.length > 0 ? senderTx[0].runningBalance : 0;
+
+    if (type === 'debit' && senderBal < val) {
+        return res.status(400).json({ success: false, message: 'Insufficient funds' });
     }
 
-    const transactions = db.transactions[accountNumber];
-    let currentBalance = 0;
-
-    if (transactions.length > 0) {
-        currentBalance = transactions[0].runningBalance;
-    }
-
-    let newBalance = type === 'credit'
-        ? currentBalance + parseFloat(amount)
-        : currentBalance - parseFloat(amount);
-
-    const newTransaction = {
+    // Prepare Sender Transaction
+    let newSenderBal = type === 'credit' ? senderBal + val : senderBal - val;
+    const senderEntry = {
         date: new Date().toLocaleDateString(),
         description,
-        amount: parseFloat(amount),
+        amount: val,
         type,
-        runningBalance: newBalance
+        runningBalance: newSenderBal
     };
+    db.transactions[accountNumber].unshift(senderEntry);
 
-    transactions.unshift(newTransaction);
+    // Handle P2P Transfer (if recipient exists)
+    if (recipientAccount && type === 'debit') {
+        const recipientExists = db.users.find(u => u.accountNumber === recipientAccount);
+        if (recipientExists) {
+            if (!db.transactions[recipientAccount]) db.transactions[recipientAccount] = [];
+
+            const recTx = db.transactions[recipientAccount];
+            const recBal = recTx.length > 0 ? recTx[0].runningBalance : 0;
+            const newRecBal = recBal + val;
+
+            const receiverEntry = {
+                date: new Date().toLocaleDateString(),
+                description: `Received from ${accountNumber}`,
+                amount: val,
+                type: 'credit',
+                runningBalance: newRecBal
+            };
+            db.transactions[recipientAccount].unshift(receiverEntry);
+        }
+    }
+
     saveData(db);
+    res.json({ success: true, transaction: senderEntry });
+});
 
-    res.json({ success: true, transaction: newTransaction });
+// Handle React routing, return all requests to React app
+app.get(/.*/, (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 app.listen(PORT, () => {

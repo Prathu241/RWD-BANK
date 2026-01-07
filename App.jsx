@@ -24,7 +24,8 @@ ChartJS.register(
     Legend
 );
 
-const API_URL = 'http://localhost:3001/api';
+// Use relative path for production, localhost for dev if needed (but proxy is better)
+const API_URL = '/api';
 const CURRENT_USER_KEY = 'bank_current_user';
 const SETTINGS_KEY = 'user_settings';
 
@@ -78,29 +79,35 @@ export default function App() {
     };
 
     return (
-        <div className={`app-container ${theme}`}>
+        <>
+            <div className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+                {theme === 'dark' ? '☀' : '☾'}
+            </div>
+            <ToastContainer position="bottom-right" theme={theme} />
+
             {user ? (
-                view === 'profile' ? (
-                    <Profile user={user} theme={theme} onBack={() => setView('dashboard')} onLogout={handleLogout} />
-                ) : (
-                    <Dashboard user={user} onLogout={handleLogout} theme={theme} onProfile={() => setView('profile')} />
-                )
+                <div style={{ display: 'flex' }}>
+                    <Sidebar view={view} setView={setView} onLogout={handleLogout} />
+                    <div className="main-content-with-sidebar">
+                        <div className="auth-card" style={{ marginBottom: '2rem', textAlign: 'left' }}>
+                            <h2>{view === 'dashboard' ? 'Dashboard' : 'My Profile'}</h2>
+                            <p className="subtitle">Welcome back, {user.name || user.accountNumber}</p>
+                        </div>
+
+                        {view === 'profile' ? (
+                            <Profile user={user} theme={theme} onLogout={handleLogout} />
+                        ) : (
+                            <Dashboard user={user} onLogout={handleLogout} theme={theme} />
+                        )}
+                    </div>
+                </div>
             ) : (
                 <Auth onLogin={handleLogin} />
             )}
-
-            <button
-                className="theme-toggle"
-                onClick={toggleTheme}
-                id="theme-btn"
-                aria-label="Toggle Theme"
-            >
-                🌗
-            </button>
-            <ToastContainer position="bottom-right" theme={theme} />
-        </div>
+        </>
     );
 }
+
 
 function Auth({ onLogin }) {
     const [isLogin, setIsLogin] = useState(true);
@@ -276,6 +283,8 @@ function Dashboard({ user, onLogout, theme, onProfile }) {
         fetchData();
     }, [user.accountNumber]);
 
+    const [recipient, setRecipient] = useState('');
+
     const handleTransactionSubmit = async (e) => {
         e.preventDefault();
         try {
@@ -286,7 +295,8 @@ function Dashboard({ user, onLogout, theme, onProfile }) {
                     accountNumber: user.accountNumber,
                     description: desc,
                     amount: parseFloat(amount),
-                    type
+                    type,
+                    recipientAccount: type === 'debit' && recipient ? recipient : undefined
                 })
             });
             const data = await res.json();
@@ -295,12 +305,13 @@ function Dashboard({ user, onLogout, theme, onProfile }) {
 
                 setDesc('');
                 setAmount('');
+                setRecipient('');
                 setType('credit');
 
                 fetchData();
                 toast.success('Transaction successful!');
             } else {
-                toast.error('Failed to add transaction');
+                toast.error(data.message || 'Failed to add transaction');
             }
         } catch (err) {
             console.error(err);
@@ -310,28 +321,7 @@ function Dashboard({ user, onLogout, theme, onProfile }) {
 
     return (
         <>
-            <header className="header">
-                <div className="brand-logo" style={{ margin: 0, width: '32px', height: '32px', fontSize: '1rem' }}>BP</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <span>Welcome, <span>{user.name || user.accountNumber}</span></span>
-                    <button
-                        className="btn btn-secondary"
-                        onClick={onProfile}
-                        style={{ width: 'auto', padding: '0.5rem 1rem', margin: 0 }}
-                    >
-                        Profile
-                    </button>
-                    <button
-                        className="btn btn-secondary"
-                        onClick={onLogout}
-                        style={{ width: 'auto', padding: '0.5rem 1rem', margin: 0 }}
-                    >
-                        Logout
-                    </button>
-                </div>
-            </header>
-
-            <main className="dashboard-container dashboard-content">
+            <div className="dashboard-content" style={{ marginTop: 0 }}>
                 <div className="balance-card">
                     <span className="balance-label">Total Balance</span>
                     <div className="balance-amount">₹{balance.toFixed(2)}</div>
@@ -382,6 +372,26 @@ function Dashboard({ user, onLogout, theme, onProfile }) {
                         <h3>Quick Transfer</h3>
                         <form onSubmit={handleTransactionSubmit}>
                             <div className="form-group">
+                                <label>Type</label>
+                                <select value={type} onChange={(e) => setType(e.target.value)}>
+                                    <option value="credit">Deposit (Self)</option>
+                                    <option value="debit">Transfer / Withdraw</option>
+                                </select>
+                            </div>
+
+                            {type === 'debit' && (
+                                <div className="form-group">
+                                    <label>Recipient Account (Optional)</label>
+                                    <input
+                                        type="text"
+                                        placeholder="Leave empty for withdrawal"
+                                        value={recipient}
+                                        onChange={(e) => setRecipient(e.target.value)}
+                                    />
+                                </div>
+                            )}
+
+                            <div className="form-group">
                                 <label>Description</label>
                                 <input
                                     type="text"
@@ -400,70 +410,108 @@ function Dashboard({ user, onLogout, theme, onProfile }) {
                                     required
                                 />
                             </div>
-                            <div className="form-group">
-                                <label>Type</label>
-                                <select value={type} onChange={(e) => setType(e.target.value)}>
-                                    <option value="credit">Credit (Deposit)</option>
-                                    <option value="debit">Debit (Withdrawal)</option>
-                                </select>
-                            </div>
-                            <button type="submit" className="btn">Process</button>
+                            <button type="submit" className="btn">Process Transaction</button>
                         </form>
                     </div>
                 </div>
-            </main>
+            </div>
+            {/* Virtual Card Section */}
+            <VirtualCard user={user} />
         </>
     );
 }
 
-function Profile({ user, theme, onBack, onLogout }) {
+function Sidebar({ view, setView, onLogout }) {
+    const navItems = [
+        { id: 'dashboard', label: 'Dashboard' },
+        { id: 'profile', label: 'Profile' }
+    ];
+
     return (
-        <>
-            <header className="header">
-                <div className="brand-logo" style={{ margin: 0, width: '32px', height: '32px', fontSize: '1rem' }}>BP</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <button
-                        className="btn btn-secondary"
-                        onClick={onBack}
-                        style={{ width: 'auto', padding: '0.5rem 1rem', margin: 0 }}
-                    >
-                        &larr; Back
-                    </button>
+        <div className="sidebar">
+            <div className="sidebar-brand">BANK</div>
+            {navItems.map(item => (
+                <div
+                    key={item.id}
+                    className={`nav-item ${view === item.id ? 'active' : ''}`}
+                    onClick={() => setView(item.id)}
+                >
+                    {item.label}
                 </div>
-            </header>
+            ))}
+            <div className="nav-item" onClick={onLogout} style={{ marginTop: 'auto', color: 'var(--secondary-accent)' }}>
+                Logout
+            </div>
+        </div>
+    );
+}
 
-            <main className="dashboard-container dashboard-content">
-                <div className="auth-card profile-card" style={{ maxWidth: '600px', margin: '0 auto' }}>
-                    <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-                        <div className="brand-logo" style={{ width: '80px', height: '80px', fontSize: '2.5rem', margin: '0 auto 1rem' }}>
-                            {user.name ? user.name[0].toUpperCase() : 'U'}
-                        </div>
-                        <h2>{user.name || 'User Profile'}</h2>
-                        <p className="subtitle">Account Details</p>
+function Profile({ user, theme, onLogout }) {
+    return (
+        <div className="auth-card profile-card" style={{ maxWidth: '600px', margin: '0 auto' }}>
+            <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                <div className="brand-logo" style={{ width: '80px', height: '80px', fontSize: '2.5rem', margin: '0 auto 1rem' }}>
+                    {user.name ? user.name[0].toUpperCase() : 'U'}
+                </div>
+                <h2>{user.name || 'User Profile'}</h2>
+                <p className="subtitle">Account Details</p>
+            </div>
+
+            <div className="profile-details">
+                <div className="detail-item">
+                    <label>Full Name</label>
+                    <div className="detail-value">{user.name || 'Not Provided'}</div>
+                </div>
+                <div className="detail-item">
+                    <label>Account Number</label>
+                    <div className="detail-value">{user.accountNumber}</div>
+                </div>
+                <div className="detail-item">
+                    <label>Account Status</label>
+                    <div className="detail-value" style={{ color: '#10b981', fontWeight: 'bold' }}>Active</div>
+                </div>
+            </div>
+        </div>
+    );
+
+}
+
+function VirtualCard({ user }) {
+    return (
+        <div style={{ maxWidth: '400px', margin: '2rem auto' }}>
+            <h3 style={{ textAlign: 'center', marginBottom: '1rem', fontWeight: 900 }}>My Virtual Card</h3>
+            <div style={{
+                background: 'linear-gradient(135deg, #1e293b, #0f172a)',
+                color: 'white',
+                padding: '1.5rem',
+                border: '3px solid #000',
+                boxShadow: '4px 4px 0px #000',
+                position: 'relative',
+                overflow: 'hidden',
+                fontFamily: 'Space Mono, monospace'
+            }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', fontStyle: 'italic' }}>BANK</div>
+                    <div style={{ fontSize: '1rem', border: '1px solid white', padding: '0 4px' }}>DEBIT</div>
+                </div>
+
+                <div style={{ width: '40px', height: '30px', background: '#fbbf24', borderRadius: '4px', marginBottom: '1rem', border: '1px solid #000' }}></div>
+
+                <div style={{ fontSize: '1.4rem', letterSpacing: '2px', marginBottom: '1.5rem', textShadow: '2px 2px 0 #000', fontWeight: 'bold' }}>
+                    4567 •••• •••• {user.accountNumber && user.accountNumber.length >= 4 ? user.accountNumber.slice(-4) : '0000'}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <div>
+                        <div style={{ fontSize: '0.6rem', opacity: 0.8 }}>CARD HOLDER</div>
+                        <div style={{ fontSize: '1rem', textTransform: 'uppercase', fontWeight: 'bold' }}>{user.name || 'VALUED USER'}</div>
                     </div>
-
-                    <div className="profile-details">
-                        <div className="detail-item">
-                            <label>Full Name</label>
-                            <div className="detail-value">{user.name || 'Not Provided'}</div>
-                        </div>
-                        <div className="detail-item">
-                            <label>Account Number</label>
-                            <div className="detail-value">{user.accountNumber}</div>
-                        </div>
-                        <div className="detail-item">
-                            <label>Account Status</label>
-                            <div className="detail-value" style={{ color: '#10b981', fontWeight: 'bold' }}>Active</div>
-                        </div>
-                    </div>
-
-                    <div style={{ marginTop: '2rem', borderTop: '1px solid #e2e8f0', paddingTop: '1rem' }}>
-                        <button className="btn btn-secondary" onClick={onLogout} style={{ width: '100%' }}>
-                            Sign Out
-                        </button>
+                    <div>
+                        <div style={{ fontSize: '0.6rem', opacity: 0.8 }}>EXPIRES</div>
+                        <div style={{ fontSize: '1rem', fontWeight: 'bold' }}>12/28</div>
                     </div>
                 </div>
-            </main>
-        </>
+            </div>
+        </div>
     );
 }
